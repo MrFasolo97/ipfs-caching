@@ -1,0 +1,29 @@
+{
+  "name": "ipfs-caching",
+  "version": "1.0.0",
+  "description": "IPFS Reverse proxy, used to cache most requested videos from IPFS",
+  "main": "ipfs-caching.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "MrFasolo97",
+  "license": "MIT",
+  "dependencies": {
+    "@helia/http": "^2.0.5",
+    "@helia/ipns": "^8.2.4",
+    "@helia/unixfs": "^5.0.0",
+    "@libp2p/peer-id": "^5.1.9",
+    "@libp2p/ping": "^3.0.10",
+    "@multiformats/dns": "^1.0.6",
+    "datastore-fs": "^10.0.2",
+    "diskusage": "^1.2.0",
+    "dotenv": "^16.5.0",
+    "express": "^5.2.1",
+    "helia": "^5.3.0",
+    "http-proxy-middleware": "^3.0.5",
+    "log4js": "^6.9.1",
+    "mongoose": "^8.13.2",
+    "stream-mime-type": "^2.0.0"
+  }
+}
