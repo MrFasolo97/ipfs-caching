@@ -18,6 +18,8 @@ import { kadDHT } from '@libp2p/kad-dht';
 import { ping } from '@libp2p/ping';
 import log4js from 'log4js';
 import { createProxyMiddleware } from 'http-proxy-middleware';
+import { unpinOldestIfNeeded, pinCid } from './pinManager';
+import mime from 'mime-types';
 
 const ipfsGateway = createProxyMiddleware({
   target: 'http://fso2.lan:8088',
@@ -26,6 +28,8 @@ const ipfsGateway = createProxyMiddleware({
 });
 
 const MAX_DIR_ENTRIES = 1000;
+let lastHDDCheck = 0;
+
 
 const logDate = new Date()
 const logDateString = logDate.toISOString().split('T')[0]
@@ -123,7 +127,7 @@ async function* listDirectoryStream(cidObj) {
 }
 
 // --- retrieve content ---
-async function retrieveContent(cidStr, subPath) {
+async function retrieveContent(cidStr, subPath, rangeHeader) {
   let cidObj = CID.parse(cidStr);
 
   // walk subPath safely
@@ -171,13 +175,30 @@ async function retrieveContent(cidStr, subPath) {
   }
 
   // ---------- FILE ----------
+  const size = Number(stat.size);
+  let streamOptions = {};
+  let isPartial = false;
+  let start = 0;
+  let end = size - 1;
+
+  // Se c'è una richiesta Range, calcoliamo i parametri per fs.cat
+  if (rangeHeader) {
+    const [startStr, endStr] = rangeHeader.replace(/bytes=/, '').split('-');
+    start = Number(startStr);
+    end = endStr ? Number(endStr) : size - 1;
+    streamOptions = { offset: start, length: end - start + 1 };
+    isPartial = true;
+  }
+
   return {
     type: 'file',
-    stream: Readable.from(fs.cat(cidObj)),
-    size: Number(stat.size),
-    mime: subPath
-      ? getMimeTypeFromName(subPath)
-      : 'application/octet-stream'
+    // Passiamo le opzioni direttamente a Helia!
+    stream: Readable.from(fs.cat(cidObj, streamOptions)),
+    size,
+    isPartial,
+    start,
+    end,
+    mime: subPath ? (mime.lookup(subPath) || 'application/octet-stream') : 'application/octet-stream'
   };
 }
 
@@ -218,8 +239,13 @@ ${rows}
 // --- handle IPFS requests ---
 async function handleIpfs(cid, subPath, req, res) {
   try {
-    const result = await retrieveContent(cid, subPath);
-
+    const result = await retrieveContent(cid, subPath, req.headers.range);
+    
+    pinCid(cid, helia).catch(err => logger.error(err));
+    if (Date.now() - lastHDDCheck > 60000) {
+      lastHDDCheck = Date.now();
+      unpinOldestIfNeeded(helia).catch(err => logger.error(err));
+    }
     if (result.type === 'directory') {
       if (!wantsHtml(req)) {
         res.json({
@@ -235,8 +261,7 @@ async function handleIpfs(cid, subPath, req, res) {
       res.send(html);
       return;
     }
-
-    handleResponse(req, res, result.mime, result.stream, result.size);
+    handleResponse(req, res, result);
   } catch (err) {
     console.error('IPFS retrieval error:', err);
     res.status(500).send(err.message);
@@ -244,51 +269,29 @@ async function handleIpfs(cid, subPath, req, res) {
 }
 
 // --- handle response with range support ---
-function handleResponse(req, res, mime, stream, size) {
+function handleResponse(req, res, result) {
+  const { mime, stream, size, isPartial, start, end } = result;
+
   res.setHeader('Content-Disposition', 'inline');
   res.setHeader('Content-Type', mime);
-  res.type(mime);
-
+  
   if (size != null) {
-    res.setHeader('Content-Length', size);
     res.setHeader('Accept-Ranges', 'bytes');
   }
 
-  const range = req.headers.range;
-
-  if (range && size != null && mime.startsWith('video/')) {
-    const [startStr, endStr] = range.replace(/bytes=/, '').split('-');
-    const start = Number(startStr);
-    const end = endStr ? Number(endStr) : size - 1;
-
+  // Se la richiesta è parziale, rispondi con 206 e gli header corretti
+  if (isPartial) {
     res.status(206);
     res.setHeader('Content-Range', `bytes ${start}-${end}/${size}`);
     res.setHeader('Content-Length', end - start + 1);
-
-    let offset = 0;
-
-    stream.on('data', chunk => {
-      const chunkStart = offset;
-      const chunkEnd = offset + chunk.length - 1;
-      offset += chunk.length;
-
-      if (chunkEnd < start || chunkStart > end) return;
-
-      const sliced = chunk.subarray(
-        Math.max(0, start - chunkStart),
-        Math.min(chunk.length, end - chunkStart + 1)
-      );
-
-      res.write(sliced);
-    });
-
-    stream.on('end', () => res.end());
-    stream.on('error', () => res.destroy());
-    return;
+  } else if (size != null) {
+    res.setHeader('Content-Length', size);
   }
 
+  // Il pipe diretto senza calcoli pesanti in memoria
   stream.pipe(res);
 }
+
 // ---- Routes ----
 router.get('/ipfs/:cid', (req, res, next) => {
   if (isDirectoryRequest(req)) {
