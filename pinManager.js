@@ -1,19 +1,16 @@
-import { createHelia } from 'helia';
 import FileRequest from './mongoose/FileRequest.js';
 import disk from 'diskusage';
 import { CID } from 'multiformats/cid';
 
-const helia = await createHelia();
 const DISK_THRESHOLD = 0.8;
-helia.start();
 
 async function getDiskUsage(path = '/') {
   const { available, free, total } = await disk.check(path);
   return 1 - free / total;
 }
 
-export async function pinCid(cid) {
-  helia.pins.add(CID.parse(cid));
+export async function pinCid(cid, helia) {
+  await helia.pins.add(CID.parse(cid));
   const doc = await FileRequest.findOneAndUpdate(
     { cid },
     { $inc: { accessCount: 1 }, lastAccessed: new Date() },
@@ -21,7 +18,7 @@ export async function pinCid(cid) {
   );
 }
 
-export async function unpinOldestIfNeeded() {
+export async function unpinOldestIfNeeded(helia) {
   const usage = await getDiskUsage();
   if (usage < DISK_THRESHOLD) return;
 
