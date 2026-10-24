@@ -18,7 +18,7 @@ import { kadDHT } from '@libp2p/kad-dht';
 import { ping } from '@libp2p/ping';
 import log4js from 'log4js';
 import { createProxyMiddleware } from 'http-proxy-middleware';
-import { unpinOldestIfNeeded, pinCid } from './pinManager';
+import { unpinOldestIfNeeded, pinCid } from './pinManager.js';
 import mime from 'mime-types';
 
 const ipfsGateway = createProxyMiddleware({
